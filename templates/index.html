@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PM Maintenance Dashboard</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- ดึง Chart.js มาใช้งาน -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body class="bg-light">
+    <div class="container my-4">
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <h2 class="text-primary m-0">🛠️ Preventive Maintenance Dashboard</h2>
+            <button class="btn btn-outline-success" onclick="exportToCSV()">
+                📥 Export รายงาน (CSV)
+            </button>
+        </div>
+        
+        <!-- บัตรสรุปสถานะ & กราฟภาพรวม -->
+        <div class="row g-3 mb-4">
+            <div class="col-md-8">
+                <div class="row g-3">
+                    <div class="col-md-4">
+                        <div class="card bg-success text-white shadow-sm h-100">
+                            <div class="card-body">
+                                <h5>สถานะปกติ (OK)</h5>
+                                <h2 id="count-ok">0</h2>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="card bg-warning text-dark shadow-sm h-100">
+                            <div class="card-body">
+                                <h5>ใกล้ถึงกำหนด (Due Soon)</h5>
+                                <h2 id="count-due">0</h2>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="card bg-danger text-white shadow-sm h-100">
+                            <div class="card-body">
+                                <h5>เลยกำหนด (Overdue)</h5>
+                                <h2 id="count-overdue">0</h2>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <!-- กล่องแจ้งเตือนด่วน -->
+                <div id="alert-box" class="alert alert-danger d-none shadow-sm mt-3 mb-0" role="alert">
+                    ⚠️ <strong>แจ้งเตือนด่วน!</strong> มีเครื่องจักรที่เลยกำหนด PM แล้ว กรุณารีบดำเนินการ
+                </div>
+            </div>
+
+            <!-- ส่วนแสดงกราฟวงกลม -->
+            <div class="col-md-4">
+                <div class="card shadow-sm h-100">
+                    <div class="card-body text-center p-2" style="max-height: 220px;">
+                        <canvas id="statusChart"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ค้นหาและกรอง -->
+        <div class="row g-2 mb-3">
+            <div class="col-md-8">
+                <input type="text" id="search-input" class="form-control" placeholder="🔍 ค้นหา Machine ID หรือ ชื่อเครื่องจักร..." onkeyup="filterData()">
+            </div>
+            <div class="col-md-4">
+                <select id="status-filter" class="form-select" onchange="filterData()">
+                    <option value="ALL">แสดงสถานะทั้งหมด</option>
+                    <option value="OK">เฉพาะ OK</option>
+                    <option value="Due Soon">เฉพาะ Due Soon</option>
+                    <option value="Overdue">เฉพาะ Overdue</option>
+                </select>
+            </div>
+        </div>
+
+        <!-- ตารางแสดงรายการเครื่องจักร -->
+        <div class="card shadow-sm">
+            <div class="card-body">
+                <h5 class="card-title mb-3">รายการเครื่องจักรทั้งหมด</h5>
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle">
+                        <thead class="table-dark">
+                            <tr>
+                                <th>Machine ID</th>
+                                <th>ชื่อเครื่องจักร</th>
+                                <th>รอบ PM (วัน)</th>
+                                <th>PM ล่าสุด</th>
+                                <th>คงเหลือ (วัน)</th>
+                                <th>สถานะ</th>
+                                <th>จัดการ</th>
+                            </tr>
+                        </thead>
+                        <tbody id="machine-table-body"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal บันทึก PM -->
+    <div class="modal fade" id="pmModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">บันทึกการทำ PM ใหม่</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="pm-form">
+                        <div class="mb-3">
+                            <label class="form-label">Machine ID</label>
+                            <input type="text" id="modal-machine-id" class="form-control" readonly>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">วันที่ทำ PM ล่าสุด</label>
+                            <input type="date" id="modal-pm-date" class="form-control" required>
+                        </div>
+                        <button type="submit" class="btn btn-primary w-100">บันทึกข้อมูลลง Excel</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        let allMachines = [];
+        let pmModal;
+        let myChart;
+
+        document.addEventListener('DOMContentLoaded', () => {
+            pmModal = new bootstrap.Modal(document.getElementById('pmModal'));
+            document.getElementById('modal-pm-date').valueAsDate = new Date();
+        });
+
+        async function fetchMachines() {
+            try {
+                const response = await fetch('/api/machines');
+                allMachines = await response.json();
+                updateCardsAndChart(allMachines);
+                renderTable(allMachines);
+            } catch (err) {
+                console.error("Error fetching data:", err);
+            }
+        }
+
+        function updateCardsAndChart(data) {
+            let ok = 0, due = 0, overdue = 0;
+            data.forEach(m => {
+                if (m.PM_Status === 'OK') ok++;
+                else if (m.PM_Status === 'Due Soon') due++;
+                else if (m.PM_Status === 'Overdue') overdue++;
+            });
+
+            document.getElementById('count-ok').innerText = ok;
+            document.getElementById('count-due').innerText = due;
+            document.getElementById('count-overdue').innerText = overdue;
+
+            // จัดการแจ้งเตือน
+            const alertBox = document.getElementById('alert-box');
+            if (overdue > 0) alertBox.classList.remove('d-none');
+            else alertBox.classList.add('d-none');
+
+            // วาดกราฟวงกลม (Doughnut Chart)
+            renderChart(ok, due, overdue);
+        }
+
+        function renderChart(ok, due, overdue) {
+            const ctx = document.getElementById('statusChart').getContext('2d');
+            
+            if (myChart) myChart.destroy(); // ทำลายกราฟเก่าก่อนวาดใหม่
+
+            myChart = new Chart(ctx, {
+                type: 'doughnut',
+                data: {
+                    labels: ['OK', 'Due Soon', 'Overdue'],
+                    datasets: [{
+                        data: [ok, due, overdue],
+                        backgroundColor: ['#198754', '#ffc107', '#dc3545']
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { position: 'bottom' }
+                    }
+                }
+            });
+        }
+
+        function renderTable(data) {
+            const tbody = document.getElementById('machine-table-body');
+            tbody.innerHTML = '';
+
+            if (data.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="7" class="text-center text-muted py-3">ไม่พบข้อมูล</td></tr>`;
+                return;
+            }
+
+            data.forEach(m => {
+                let badgeClass = 'bg-success';
+                if (m.PM_Status === 'Due Soon') badgeClass = 'bg-warning text-dark';
+                if (m.PM_Status === 'Overdue') badgeClass = 'bg-danger';
+
+                const row = `
+                    <tr>
+                        <td><strong>${m.Machine_ID}</strong></td>
+                        <td>${m.Machine_Name}</td>
+                        <td>${m.PM_Interval_Days}</td>
+                        <td>${m.Last_PM_Date}</td>
+                        <td>${m.Days_Remaining}</td>
+                        <td><span class="badge ${badgeClass}">${m.PM_Status}</span></td>
+                        <td>
+                            <button class="btn btn-sm btn-outline-primary" onclick="openPMModal('${m.Machine_ID}')">
+                                🔧 ทำ PM
+                            </button>
+                        </td>
+                    </tr>
+                `;
+                tbody.innerHTML += row;
+            });
+        }
+
+        function filterData() {
+            const searchText = document.getElementById('search-input').value.toLowerCase();
+            const selectedStatus = document.getElementById('status-filter').value;
+
+            const filtered = allMachines.filter(m => {
+                const matchSearch = m.Machine_ID.toLowerCase().includes(searchText) || 
+                                    m.Machine_Name.toLowerCase().includes(searchText);
+                const matchStatus = selectedStatus === 'ALL' || m.PM_Status === selectedStatus;
+                return matchSearch && matchStatus;
+            });
+
+            renderTable(filtered);
+        }
+
+        function openPMModal(machineId) {
+            document.getElementById('modal-machine-id').value = machineId;
+            pmModal.show();
+        }
+
+        document.getElementById('pm-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const machine_id = document.getElementById('modal-machine-id').value;
+            const new_date = document.getElementById('modal-pm-date').value;
+
+            try {
+                const response = await fetch('/api/update_pm', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ machine_id, new_date })
+                });
+
+                const result = await response.json();
+                if (response.ok && result.status === 'success') {
+                    alert('บันทึกการทำ PM เรียบร้อยแล้ว!');
+                    pmModal.hide();
+                    fetchMachines();
+                } else {
+                    alert('เกิดข้อผิดพลาด: ' + result.message);
+                }
+            } catch (err) {
+                alert('เกิดข้อผิดพลาดในการเชื่อมต่อกับ Server');
+            }
+        });
+
+        function exportToCSV() {
+            if (allMachines.length === 0) return alert('ไม่มีข้อมูลสำหรับ Export');
+
+            let csvContent = "\uFEFFMachine_ID,Machine_Name,PM_Interval_Days,Last_PM_Date,Days_Remaining,PM_Status\n";
+            allMachines.forEach(m => {
+                csvContent += `"${m.Machine_ID}","${m.Machine_Name}",${m.PM_Interval_Days},"${m.Last_PM_Date}",${m.Days_Remaining},"${m.PM_Status}"\n`;
+            });
+
+            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `PM_Report_${new Date().toISOString().slice(0, 10)}.csv`;
+            a.click();
+        }
+
+        fetchMachines();
+    </script>
+</body>
+</html>
